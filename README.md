@@ -1,17 +1,15 @@
 # MoireDet 单图推理复现
 
-这是论文 *Doing More With Moiré Pattern Detection in Digital Photos* 的考核导向复现工程。上游为 [cong-yang/MoireDet](https://github.com/cong-yang/MoireDet)，固定提交 `afde899f3c3beee96160610ee450618136a38f7b`；本仓库的适配和说明以该提交为准（见 `docs/upstream/UPSTREAM.md`）。上游没有给出明确代码许可证，因此这里只记录来源，不将整个项目声明为 MIT。
+这是论文 *Doing More With Moiré Pattern Detection in Digital Photos* 的考核导向复现工程。上游固定为 [cong-yang/MoireDet](https://github.com/cong-yang/MoireDet) 提交 `afde899f3c3beee96160610ee450618136a38f7b`；适配层以该快照为准，详见 `docs/upstream/UPSTREAM.md`。
 
-## 状态边界
+## 当前状态
 
-- 代码兼容层和无权重验证可以完成：固定环境、配置、官方模型构建、随机前向、CLI 和输出契约均可验证。
-- 可信检查点集成与 RTX 正式验收仍为 **SKIPPED**，直到取得可信的 `PSENet_100_loss0.000000.pth`、来源证据和真实 SHA-256，并通过严格加载、样例/自选图视觉检查及基准测试。
+- 代码兼容层和无权重验证已完成：固定环境、配置、官方模型构建、随机前向、CLI 和四文件输出契约均可验证。
+- 可信检查点与 RTX 4060 正式验收仍为 **SKIPPED / 未完成**。当前没有可信的 `PSENet_100_loss0.000000.pth`、其来源证据和真实 SHA-256；因此不能声称完成有权重复现或正式验收。
 
-因此，在没有可信权重时，绝不能声称考核 Task 1 已完整复现。
+## 固定环境
 
-## 固定环境与安装（Windows/RTX）
-
-目标为 Python 3.8.20、PyTorch `1.10.0+cu113`、torchvision `0.11.1+cu113`、CUDA 11.3、`opencv-python` wheel `4.11.0.86`、NumPy 1.24.3、PyYAML 6.0.2、einops 0.3.0、local-attention 1.2.1。注意 `cv2.__version__` 实测为 `4.11.0`，它不是 wheel/distribution 版本；诊断脚本同时报告两者。
+目标环境为 Python 3.8.20、PyTorch `1.10.0+cu113`、torchvision `0.11.1+cu113`、CUDA 11.3、OpenCV wheel `4.11.0.86`、NumPy 1.24.3、PyYAML 6.0.2、einops 0.3.0 和 local-attention 1.2.1。
 
 ```powershell
 D:\anaconda3\Scripts\conda.exe env create -f .\environment.yml
@@ -19,56 +17,56 @@ D:\anaconda3\envs\moiredet-repro\python.exe -m pip install -e . --no-deps
 D:\anaconda3\envs\moiredet-repro\python.exe -m pip check
 ```
 
-若学校网络的 TLS 或 PyPI 访问失败，使用仓库 `.superpowers\sdd\2026-07-27-moiredet-inference-reproduction` 中已缓存的 wheel，并以 `--no-index --find-links <该目录>` 安装；不要放宽证书校验或替换固定版本。
-
-## 无权重诊断
-
-诊断不会读取检查点、不会调用 `torch.load`、不会联网；它会校验实际安装版本、执行 CUDA 矩阵乘法，并对未加载权重的官方模型做真实随机前向。任何目录均可执行：
+无权重诊断不会读取检查点、调用 `torch.load` 或联网：
 
 ```powershell
-D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\verify_environment.py --device cpu
-D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\verify_environment.py --device cuda
 D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\verify_environment.py --device all
 D:\anaconda3\envs\moiredet-repro\python.exe -m pytest -m "not checkpoint" -v
 ```
 
-CPU/CUDA 的 `*_random_forward_shape` 应为 `[320, 320]`；`checkpoint_integration` 必为 `not_run`。随机前向只能说明环境和网络结构可以执行，不证明检测质量。
+随机前向只证明环境和网络结构可运行，不证明检测质量。
 
-## 可信权重、单图推理和输出
+## 可信检查点验收门
 
-将可信的原始文件放到 `weights/PSENet_100_loss0.000000.pth`，并在同目录创建 `weights/PSENet_100_loss0.000000.pth.json`。作者在固定上游提交的 `MoireDet/script/model_download.txt` 中提供的原始链接为 [`PSENet_100_loss0.000000.pth`](https://drive.google.com/file/d/1QivNnHWaomJmUuBgueGzwtVooijsc_TH/view?usp=sharing)。该链接在当前环境不可取得；这里仅记录作者提供的原始来源，**不表示已成功下载**。sidecar 必须使用 `weights/checkpoint.example.json` 的 schema，提供允许来源类型、可核验来源证据和精确小写 SHA-256。示例中的全零 hash 是故意不可用的哨兵值。加载器仅在来源和哈希验证都成功后才会反序列化；因为 `torch.load` 是 pickle-based，只能使用可信文件。
-
-```powershell
-D:\anaconda3\envs\moiredet-repro\python.exe -m moiredet_repro.cli infer --input .\MoireDet\script\00002423.png --checkpoint .\weights\PSENet_100_loss0.000000.pth --checkpoint-manifest .\weights\PSENet_100_loss0.000000.pth.json --output .\outputs\official-sample --device cuda
-```
-
-`--output` 必须是新建且不存在的目录叶节点；已有目录、文件或任何目标文件都会拒绝，避免覆盖结果。一次成功运行恰好生成四个文件：
-
-- `prediction.npy`：未显示归一化的 `320 x 320 float32` 原始预测；
-- `moire_map.png`：恢复输入尺寸的 8 位灰度图；
-- `comparison.png`：左侧原图、右侧检测图；
-- `run.json`：输入、上游提交、权重可信状态、运行时、预测范围、性能和输出清单。
-
-逐图 min-max 仅用于 PNG 显示，不会改写 `prediction.npy`。输入采用 OpenCV BGR、直接双线性缩放到 320×320、ImageNet mean/std、batch size 1；中文 Windows 路径可用。
-
-## RTX 正式基准
-
-在可信权重已验证后，基准固定为 5 次预热和 20 次计时：
+不要下载、伪造或提交权重、manifest、个人图片或运行输出。权重与验收产物均由 `.gitignore` 排除。只有从允许的来源获得原始权重并记录可核验来源证据后，才可在 `weights/PSENet_100_loss0.000000.pth` 放置文件，并依照 `weights/checkpoint.example.json` 的 schema 创建同名 `.pth.json` manifest。manifest 的 SHA-256 必须来自该文件的真实哈希。
 
 ```powershell
-D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\benchmark_inference.py --input .\MoireDet\script\00002423.png --checkpoint .\weights\PSENet_100_loss0.000000.pth --checkpoint-manifest .\weights\PSENet_100_loss0.000000.pth.json --output .\outputs\acceptance\benchmark.json --device cuda
+$env:MOIREDET_CHECKPOINT = (Resolve-Path .\weights\PSENet_100_loss0.000000.pth).Path
+$env:MOIREDET_CHECKPOINT_MANIFEST = (Resolve-Path .\weights\PSENet_100_loss0.000000.pth.json).Path
+$env:MOIREDET_USER_IMAGE = (Resolve-Path .\examples\input\user_moire.png).Path  # 可选
+
+D:\anaconda3\envs\moiredet-repro\python.exe -m pytest tests\integration\test_official_checkpoint.py -v -rs
 D:\anaconda3\envs\moiredet-repro\python.exe -m pytest -m checkpoint -v -rs
+D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\benchmark_inference.py --input .\MoireDet\script\00002423.png --checkpoint $env:MOIREDET_CHECKPOINT --checkpoint-manifest $env:MOIREDET_CHECKPOINT_MANIFEST --output .\outputs\acceptance\benchmark.json --device cuda
 ```
 
-没有权重或 `MOIREDET_*` 检查点环境变量时，检查点测试应为 `SKIPPED`，不是 `PASSED`。
+该 gate 在未设置 `MOIREDET_CHECKPOINT` 和 `MOIREDET_CHECKPOINT_MANIFEST` 时会明确 `SKIPPED`；一旦变量已设置，缺失、来源无效、哈希不匹配或严格 state-dict 不匹配都会失败，绝不静默跳过。用户图片仅控制用户图片用例。正式验收还要求实际 CUDA 设备为 RTX 4060。
 
-## 排障
+在可信输入和 RTX 4060 到位后，验收会严格 CPU 加载权重，再对官方样图和可选用户图执行 CUDA 推理；每个输出目录必须恰好包含：
 
-- `checkpoint file is missing`：补齐原始权重及同名 manifest，不要改全局 Python。
-- `untrusted source_type` 或 `SHA-256 mismatch`：补齐可信来源证据，重新计算真实文件哈希。
-- `strict state_dict mismatch`：文件不是目标 `TripleBranchWithSpecificConv` 权重，停止使用它。
-- `--device cuda` 但 CUDA 不可用：检查 NVIDIA 驱动与 PyTorch 的 cu113 构建。
-- 输出冲突：使用新的、尚不存在的 `--output` 目录/基准 JSON 文件。
-- NaN/Inf：此次输出无效，不能作为检测结果。
+- `prediction.npy`：原始 `320 x 320 float32` 预测；
+- `moire_map.png`：恢复到输入尺寸的灰度图；
+- `comparison.png`：输入和检测图的并排图；
+- `run.json`：输入、上游提交、已验证权重、预测范围、性能和输出清单。
 
-仍无法取得可信权重时，可直接发送 `docs/checkpoint-request-message.md`。
+基准固定为 5 次预热和 20 次计时，并要求正的延迟以及两项峰值显存字段。重复推理必须满足 `rtol=1e-5, atol=1e-6`。
+
+## 人工视觉检查
+
+在执行正式验收后，打开官方样图和用户图（若提供）的 `comparison.png`，并在 `outputs/acceptance/visual-check.md` 记录：
+
+- 两个 PNG 都能正确解码；
+- 图像不是意外全黑或全白；
+- 高响应区域与可见的摩尔纹区域相对应；
+- 各 `run.json` 的 raw min、max 和 dynamic range；
+- 审核人姓名和日期。
+
+只有完成这项人工检查、可信权重验证和 RTX 4060 测试后，才能将状态改为“Task 1 单图推理验收完成”。
+
+最后运行：
+
+```powershell
+D:\anaconda3\envs\moiredet-repro\python.exe -m pytest -v
+git diff --check
+git status --short
+```
