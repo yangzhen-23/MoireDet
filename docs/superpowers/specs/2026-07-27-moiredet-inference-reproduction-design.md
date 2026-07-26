@@ -119,7 +119,7 @@ moire_reproduction/
 
 已确认目标类在构造注意力分支时硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0001-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。补丁内容、应用命令和应用后的文件哈希写入 `UPSTREAM.md`。
 
-`upstream_adapter.py` 从已安装包位置解析仓库根目录，校验 `upstream/MoireDet/lib` 存在后，将仓库内的 `upstream/MoireDet` 作为唯一的上游导入根加入当前进程搜索路径，再导入作者的 `lib.models`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少上游快照时明确失败。
+`upstream_adapter.py` 从已安装包位置解析仓库根目录，同时校验 `upstream/MoireDet/lib` 和 `upstream/MoireDet/script/performer_pytorch` 存在；随后只把仓库内的 `upstream/MoireDet` 与 `upstream/MoireDet/script` 两个相对位置加入当前进程搜索路径，再导入作者的 `lib.models` 和随仓库提供的 `performer_pytorch`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少任一上游组件时明确失败。
 
 ### 6.2 环境层
 
