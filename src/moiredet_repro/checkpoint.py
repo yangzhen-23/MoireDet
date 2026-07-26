@@ -4,6 +4,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -62,12 +63,22 @@ def default_manifest_path(checkpoint: Path) -> Path:
     return Path(str(checkpoint) + ".json")
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _read_checkpoint_snapshot(path: Path) -> bytes:
+    """Return the only checkpoint bytes that will be verified and deserialized."""
+    try:
+        snapshot = path.read_bytes()
+    except OSError as exc:
+        raise CheckpointError("checkpoint file is missing or unreadable: {}".format(path)) from exc
+    if not snapshot:
+        raise CheckpointError("checkpoint is empty")
+    head = snapshot[:512].lower()
+    if b"<html" in head or b"<!doctype html" in head:
+        raise CheckpointError("checkpoint is an HTML download page")
+    return snapshot
+
+
+def _sha256_bytes(snapshot: bytes) -> str:
+    return hashlib.sha256(snapshot).hexdigest()
 
 
 def _read_manifest(path: Path, checkpoint: Path) -> CheckpointManifest:
@@ -125,19 +136,9 @@ def load_checkpoint_bundle(
     manifest_file = (
         Path(manifest_path) if manifest_path is not None else default_manifest_path(checkpoint)
     )
-    if not checkpoint.is_file():
-        raise CheckpointError("checkpoint file is missing: {}".format(checkpoint))
-
     manifest = _read_manifest(manifest_file, checkpoint)
-    size = checkpoint.stat().st_size
-    if size == 0:
-        raise CheckpointError("checkpoint is empty")
-    with checkpoint.open("rb") as handle:
-        head = handle.read(512).lower()
-    if b"<html" in head or b"<!doctype html" in head:
-        raise CheckpointError("checkpoint is an HTML download page")
-
-    actual_sha256 = _sha256_file(checkpoint)
+    snapshot = _read_checkpoint_snapshot(checkpoint)
+    actual_sha256 = _sha256_bytes(snapshot)
     if actual_sha256 != manifest.expected_sha256:
         raise CheckpointError(
             "SHA-256 mismatch: expected {}, got {}".format(
@@ -145,7 +146,7 @@ def load_checkpoint_bundle(
             )
         )
     try:
-        payload = torch.load(str(checkpoint), map_location="cpu")
+        payload = torch.load(io.BytesIO(snapshot), map_location="cpu")
     except Exception as exc:
         raise CheckpointError(
             "trusted checkpoint could not be deserialized: {}".format(exc)
@@ -154,7 +155,7 @@ def load_checkpoint_bundle(
         raise CheckpointError("official checkpoint must contain a top-level state_dict mapping")
 
     info = CheckpointInfo(
-        checkpoint.resolve(), size, actual_sha256, manifest, checkpoint_verified=True
+        checkpoint.resolve(), len(snapshot), actual_sha256, manifest, checkpoint_verified=True
     )
     return CheckpointBundle(_normalize_state_dict(payload["state_dict"]), info)
 

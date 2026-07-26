@@ -1,10 +1,12 @@
 import hashlib
+import io
 import json
 from pathlib import Path
 
 import pytest
 import torch
 
+import moiredet_repro.checkpoint as checkpoint_module
 from moiredet_repro.checkpoint import (
     default_manifest_path,
     load_checkpoint_bundle,
@@ -55,6 +57,35 @@ def test_matching_hash_loads_wrapped_state_dict_and_strips_prefix(tmp_path):
     assert set(bundle.state_dict) == {"weight", "bias"}
     assert bundle.info.sha256 == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     assert bundle.info.checkpoint_verified is True
+
+
+def test_deserialization_uses_the_verified_byte_snapshot_when_path_is_replaced(
+    tmp_path, monkeypatch
+):
+    checkpoint, manifest = write_checkpoint_and_manifest(
+        tmp_path, {"state_dict": {"weight": torch.tensor([1.0])}}
+    )
+    expected_bytes = checkpoint.read_bytes()
+    replacement = tmp_path / "replacement.pth"
+    torch.save({"state_dict": {"weight": torch.tensor([2.0])}}, replacement)
+    real_torch_load = torch.load
+    received_sources = []
+
+    def replace_path_before_load(source, *args, **kwargs):
+        checkpoint.write_bytes(replacement.read_bytes())
+        received_sources.append(source)
+        return real_torch_load(source, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_module.torch, "load", replace_path_before_load)
+
+    bundle = load_checkpoint_bundle(checkpoint, manifest)
+
+    assert len(received_sources) == 1
+    assert isinstance(received_sources[0], io.BytesIO)
+    assert hashlib.sha256(received_sources[0].getvalue()).hexdigest() == hashlib.sha256(
+        expected_bytes
+    ).hexdigest()
+    assert bundle.state_dict["weight"].item() == 1.0
 
 
 @pytest.mark.parametrize("payload", [b"", b"<!doctype html><html>download failed</html>"])
