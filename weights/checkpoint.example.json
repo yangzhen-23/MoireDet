@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "filename": "model.pth",
+  "filename": "PSENet_100_loss0.000000.pth",
   "source_type": "advisor_direct",
   "source_reference": "advisor file transfer",
   "retrieved_at": "2026-07-27",
