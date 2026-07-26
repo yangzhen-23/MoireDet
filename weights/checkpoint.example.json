@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "filename": "model.pth",
+  "source_type": "advisor_direct",
+  "source_reference": "advisor file transfer",
+  "retrieved_at": "2026-07-27",
+  "provenance_evidence": "Replace this example with evidence identifying the official checkpoint and transfer.",
+  "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
