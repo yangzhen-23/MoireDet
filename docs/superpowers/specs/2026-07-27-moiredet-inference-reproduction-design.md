@@ -83,7 +83,8 @@ moire_reproduction/
     MoireDet/
     UPSTREAM.md
   patches/
-    0001-disable-resnet-online-download.patch
+    0001-torchvision-load-state-dict-compat.patch
+    0002-disable-resnet-online-download.patch
   src/
     moiredet_repro/
       __init__.py
@@ -117,7 +118,9 @@ moire_reproduction/
 
 `UPSTREAM.md` 记录仓库 URL、提交哈希、获取日期和已做的完整性检查。上游快照通过 Git archive 导出，不携带嵌套 `.git` 目录。若必须对上游代码做最小兼容修改，每一处修改都以补丁文件或清晰的提交记录呈现，不能无记录地改写核心网络。
 
-已确认目标类在构造注意力分支时硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0001-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。补丁内容、应用命令和应用后的文件哈希写入 `UPSTREAM.md`。
+已确认当前 torchvision 不再提供作者使用的 `torchvision.models.utils` 导入路径，而 `resnet.py` 和被无条件导入的 `resnet_dct.py` 都依赖它。`patches/0001-torchvision-load-state-dict-compat.patch` 在这两个文件中优先尝试旧路径，失败时回退到 PyTorch 1.10 已提供的 `torch.hub.load_state_dict_from_url`，只修复导入兼容性。
+
+目标类在构造注意力分支时还硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0002-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。两个补丁的内容、应用命令和应用后的文件哈希都写入 `UPSTREAM.md`。
 
 `upstream_adapter.py` 从已安装包位置解析仓库根目录，同时校验 `upstream/MoireDet/lib` 和 `upstream/MoireDet/script/performer_pytorch` 存在；随后只把仓库内的 `upstream/MoireDet` 与 `upstream/MoireDet/script` 两个相对位置加入当前进程搜索路径，再导入作者的 `lib.models` 和随仓库提供的 `performer_pytorch`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少任一上游组件时明确失败。
 
@@ -162,7 +165,7 @@ moire_reproduction/
 
 `inference.py` 封装模型生命周期：构建模型、加载检查点、切换 `eval()`、选择设备并在 `torch.no_grad()` 下执行前向。模型契约固定为作者 `sample_code.json` 中的 `TripleBranchWithSpecificConv`，参数固定为 `backbone=resnet18`、`fpem_repeat=2`、`segmentation_head=FPEM_FFM`、`is_dct=false`、`is_light=true`；配置中的 `pretrained=true` 只表示作者原始初始化意图，离线兼容补丁按第 6.1 节处理实际构建。
 
-目标模型的返回契约是二元组 `([moire_density], fea_loss)`。输出选择严格沿用作者 `sample_code.py` 的语义，即从 `model(img)[0][0][0][0]` 取得首个样本的二维预测；兼容层对二元组、单元素预测列表、批次/通道维和最终 `320 x 320` 形状逐层显式校验，不以启发式规则猜测其他输出。服务返回统一的二维 `float32` 摩尔纹边缘图，不把显示归一化混入模型结果。首版固定 batch size 为 1，不引入 AMP、模型编译或并发等非必要优化。
+目标模型的返回契约是二元组 `([moire_density], fea_loss)`。输出选择严格沿用作者 `sample_code.py` 的语义，即从 `model(img)[0][0][0][0]` 取得首个样本的二维预测；兼容层对二元组、单元素预测列表、批次/通道维和最终 `320 x 320` 形状逐层显式校验，不以启发式规则猜测其他输出。作者代码把 Performer 输入整理为 `[S, B, C]`，而随仓库提供的实现按 `[B, S, C]` 解读；首阶段保留这一公开代码行为并强制 batch size 为 1，不自行转置“修正”，把差异留作汇报材料。服务返回统一的二维 `float32` 摩尔纹边缘图，不把显示归一化混入模型结果。首版不引入 AMP、模型编译或并发等非必要优化。
 
 ### 6.6 输出与可视化
 
