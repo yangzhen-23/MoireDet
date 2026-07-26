@@ -309,9 +309,6 @@ git commit -m "build: bootstrap isolated MoireDet reproduction package"
 from pathlib import Path
 
 
-PINNED = "afde899f3c3beee96160610ee450618136a38f7b"
-
-
 def test_upstream_baseline_and_sample_are_pinned():
     root = Path(__file__).resolve().parents[1]
     assert (root / "MoireDet" / "script" / "00002423.png").is_file()
@@ -1432,10 +1429,11 @@ def test_output_conflict_stops_before_model_build(tmp_path, monkeypatch):
     checkpoint = tmp_path / "model.pth"
     checkpoint.write_bytes(b"unused")
     output = tmp_path / "out"; output.mkdir(); (output / "run.json").write_text("keep")
-    called = []
-    monkeypatch.setattr(cli.MoireDetInference, "from_checkpoint", lambda **kwargs: called.append(True))
+    def fail_if_model_is_built(**kwargs):
+        raise AssertionError("model construction ran before output preflight")
+    monkeypatch.setattr(cli.MoireDetInference, "from_checkpoint", fail_if_model_is_built)
     code = cli.main(["infer", "--input", str(input_path), "--checkpoint", str(checkpoint), "--output", str(output)])
-    assert code == 2 and called == []
+    assert code == 2
     assert (output / "run.json").read_text() == "keep"
 ```
 
