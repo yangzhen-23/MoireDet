@@ -106,6 +106,7 @@ def collect_report(requested_device="all"):
         "checkpoint_integration": "not_run",
         "checkpoint_deserialization": "not_attempted",
         "network_access": "not_attempted",
+        "safety_guards": "checkpoint/network operations prohibited",
     }
     return report, int(not (pins_match and requested_shape == [320, 320]))
 

@@ -21,3 +21,9 @@ Initial RED: `D:\anaconda3\envs\moiredet-repro\python.exe -m pytest tests\test_s
 ## Remaining boundary
 
 No trusted checkpoint was supplied. The diagnostic explicitly reports `checkpoint_integration: not_run`, `checkpoint_deserialization: not_attempted`, and `network_access: not_attempted`; trusted checkpoint integration and RTX formal acceptance remain SKIPPED.
+
+## Fix Round 1 — provenance and no-load/no-network traps
+
+- Documented the exact author-provided original Google Drive URL for `PSENet_100_loss0.000000.pth` from pinned upstream `MoireDet/script/model_download.txt` in README, upstream provenance, and checkpoint guidance. All three explicitly state that it is unavailable in this environment and has not been downloaded or validated.
+- Added a CPU real-forward trap test which replaces `torch.load`, `torch.hub.load`, `torch.hub.load_state_dict_from_url`, `torch.utils.model_zoo.load_url`, and `urllib.request.urlopen` with failing sentinels. RED failed before adding the diagnostic safety status; GREEN executed the official CPU model forward with zero sentinel calls and reported `not_run` / `not_attempted` states plus `safety_guards`.
+- Focused `tests/test_scripts.py`: 5 passed. Full suite: 69 passed, 3 pre-existing upstream/dependency deprecation warnings, 12.36 s. Fresh `verify_environment.py --device all`: 7.11 s, CPU and CUDA shapes `[320, 320]`, versions matched, RTX 4060 available, and no checkpoint/network attempt reported.

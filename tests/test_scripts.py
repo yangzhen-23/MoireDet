@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import urllib.request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,3 +82,42 @@ def test_environment_forward_suppresses_upstream_noise(monkeypatch, capsys):
     monkeypatch.setattr(verify_environment, "MoireDetInference", FakeService)
     assert verify_environment._run_forward(verify_environment.torch.device("cpu")) == [320, 320]
     assert capsys.readouterr().out == ""
+
+
+def test_environment_cpu_forward_does_not_deserialize_or_access_network(monkeypatch):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import verify_environment
+    finally:
+        sys.path.pop(0)
+
+    calls = []
+
+    def forbidden(name):
+        def reject(*args, **kwargs):
+            calls.append(name)
+            raise AssertionError("verifier attempted forbidden operation: {}".format(name))
+
+        return reject
+
+    monkeypatch.setattr(verify_environment.torch, "load", forbidden("torch.load"))
+    monkeypatch.setattr(verify_environment.torch.hub, "load", forbidden("torch.hub.load"))
+    monkeypatch.setattr(
+        verify_environment.torch.hub,
+        "load_state_dict_from_url",
+        forbidden("torch.hub.load_state_dict_from_url"),
+    )
+    monkeypatch.setattr(
+        verify_environment.torch.utils.model_zoo,
+        "load_url",
+        forbidden("torch.utils.model_zoo.load_url"),
+    )
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden("urllib.request.urlopen"))
+
+    report, exit_code = verify_environment.collect_report("cpu")
+    assert exit_code == 0
+    assert calls == []
+    assert report["checkpoint_integration"] == "not_run"
+    assert report["checkpoint_deserialization"] == "not_attempted"
+    assert report["network_access"] == "not_attempted"
+    assert report["safety_guards"] == "checkpoint/network operations prohibited"

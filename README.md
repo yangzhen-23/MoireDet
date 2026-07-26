@@ -36,7 +36,7 @@ CPU/CUDA 的 `*_random_forward_shape` 应为 `[320, 320]`；`checkpoint_integrat
 
 ## 可信权重、单图推理和输出
 
-将可信的原始文件放到 `weights/PSENet_100_loss0.000000.pth`，并在同目录创建 `weights/PSENet_100_loss0.000000.pth.json`。sidecar 必须使用 `weights/checkpoint.example.json` 的 schema，提供允许来源类型、可核验来源证据和精确小写 SHA-256。示例中的全零 hash 是故意不可用的哨兵值。加载器仅在来源和哈希验证都成功后才会反序列化；因为 `torch.load` 是 pickle-based，只能使用可信文件。
+将可信的原始文件放到 `weights/PSENet_100_loss0.000000.pth`，并在同目录创建 `weights/PSENet_100_loss0.000000.pth.json`。作者在固定上游提交的 `MoireDet/script/model_download.txt` 中提供的原始链接为 [`PSENet_100_loss0.000000.pth`](https://drive.google.com/file/d/1QivNnHWaomJmUuBgueGzwtVooijsc_TH/view?usp=sharing)。该链接在当前环境不可取得；这里仅记录作者提供的原始来源，**不表示已成功下载**。sidecar 必须使用 `weights/checkpoint.example.json` 的 schema，提供允许来源类型、可核验来源证据和精确小写 SHA-256。示例中的全零 hash 是故意不可用的哨兵值。加载器仅在来源和哈希验证都成功后才会反序列化；因为 `torch.load` 是 pickle-based，只能使用可信文件。
 
 ```powershell
 D:\anaconda3\envs\moiredet-repro\python.exe -m moiredet_repro.cli infer --input .\MoireDet\script\00002423.png --checkpoint .\weights\PSENet_100_loss0.000000.pth --checkpoint-manifest .\weights\PSENet_100_loss0.000000.pth.json --output .\outputs\official-sample --device cuda

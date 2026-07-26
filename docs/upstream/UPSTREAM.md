@@ -24,6 +24,16 @@ The upstream repository showed no code license.  This record supplies
 attribution and documents a local compatibility patch only; it does not grant
 any license to the upstream code.
 
+## Author-provided checkpoint provenance
+
+The pinned upstream file `MoireDet/script/model_download.txt` maps
+`PSENet_100_loss0.000000.pth` to the author-provided original Google Drive
+link: https://drive.google.com/file/d/1QivNnHWaomJmUuBgueGzwtVooijsc_TH/view?usp=sharing
+
+This is a provenance record only. The link is currently unavailable in this
+environment; this repository does not claim that the weight was downloaded or
+validated from it.
+
 ## Integrity records
 
 Unpatched `MoireDet/lib/models/model.py` Git-object SHA-256:
