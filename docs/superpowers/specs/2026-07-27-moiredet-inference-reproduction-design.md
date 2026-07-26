@@ -73,15 +73,14 @@ MoireDet 是图像到图像的回归模型，而不是去摩尔纹模型。输�
 
 ## 5. 项目边界与目录
 
-最终项目位于独立目录 `moire_reproduction/`，自身使用 Git 管理，不把论文 PDF、考核原文或临时调查目录纳入版本库。
+最终项目发布到用户仓库 `yangzhen-23/MoireDet` 的功能分支；本地工作目录仍为 `moire_reproduction/`。该仓库的 `main` 已经精确指向作者上游固定提交 `afde899f3c3beee96160610ee450618136a38f7b`，因此直接复用仓库中已跟踪的 `MoireDet/`，不再复制第二份源码。论文 PDF、考核原文和临时调查目录不纳入版本库。
 
 ```text
 moire_reproduction/
+  MoireDet/                  # main 分支已有的作者源码
   docs/
+    upstream/UPSTREAM.md
     superpowers/specs/
-  upstream/
-    MoireDet/
-    UPSTREAM.md
   patches/
     0001-torchvision-load-state-dict-compat.patch
     0002-disable-resnet-online-download.patch
@@ -110,19 +109,19 @@ moire_reproduction/
   .gitignore
 ```
 
-`upstream/MoireDet/` 保存固定提交的纯源码快照；外围兼容代码不反向混入上游目录。`weights/` 和 `outputs/` 默认不提交，避免误提交大文件和个人素材。
+`MoireDet/` 由远端 `main` 的固定上游提交直接提供，只接受下述三行运行时兼容修改；其余外围代码放在 `src/moiredet_repro/`。`weights/` 和 `outputs/` 默认不提交，避免误提交大文件和个人素材。
 
 ## 6. 组件设计
 
-### 6.1 上游快照与来源记录
+### 6.1 上游基线与来源记录
 
-`UPSTREAM.md` 记录仓库 URL、提交哈希、获取日期和已做的完整性检查。上游快照通过 Git archive 导出，不携带嵌套 `.git` 目录。若必须对上游代码做最小兼容修改，每一处修改都以补丁文件或清晰的提交记录呈现，不能无记录地改写核心网络。
+`docs/upstream/UPSTREAM.md` 记录仓库 URL、提交哈希、远端 `main` 基线和已做的完整性检查。由于用户仓库本身就是作者仓库的精确派生，不执行 Git archive，也不引入重复快照。每一处最小兼容修改都同时以补丁文件和清晰提交记录呈现，不能无记录地改写核心网络。
 
 已确认当前 torchvision 不再提供作者使用的 `torchvision.models.utils` 导入路径，而 `resnet.py` 和被无条件导入的 `resnet_dct.py` 都依赖它。`patches/0001-torchvision-load-state-dict-compat.patch` 在这两个文件中优先尝试旧路径，失败时回退到 PyTorch 1.10 已提供的 `torch.hub.load_state_dict_from_url`，只修复导入兼容性。
 
-目标类在构造注意力分支时还硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0002-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。两个补丁的内容、应用命令和应用后的文件哈希都写入 `UPSTREAM.md`。
+目标类在构造注意力分支时还硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0002-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。两个补丁的内容、应用命令和应用后的文件哈希都写入 `docs/upstream/UPSTREAM.md`。
 
-`upstream_adapter.py` 从已安装包位置解析仓库根目录，同时校验 `upstream/MoireDet/lib` 和 `upstream/MoireDet/script/performer_pytorch` 存在；随后只把仓库内的 `upstream/MoireDet` 与 `upstream/MoireDet/script` 两个相对位置加入当前进程搜索路径，再导入作者的 `lib.models` 和随仓库提供的 `performer_pytorch`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少任一上游组件时明确失败。
+`upstream_adapter.py` 从已安装包位置解析仓库根目录，同时校验 `MoireDet/lib` 和 `MoireDet/script/performer_pytorch` 存在；随后只把仓库内的 `MoireDet` 与 `MoireDet/script` 两个相对位置加入当前进程搜索路径，再导入作者的 `lib.models` 和随仓库提供的 `performer_pytorch`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少任一上游组件时明确失败。
 
 ### 6.2 环境层
 
