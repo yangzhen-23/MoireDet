@@ -1,1 +1,15 @@
 .worktrees/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.coverage
+.idea/
+.vscode/
+weights/*
+!weights/README.md
+!weights/checkpoint.example.json
+outputs/*
+!outputs/.gitkeep
+examples/input/*
+!examples/input/.gitkeep

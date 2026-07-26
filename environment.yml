@@ -1,0 +1,19 @@
+name: moiredet-repro
+channels:
+  - defaults
+dependencies:
+  - python=3.8.20
+  - pip=24.2
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu113
+      - torch==1.10.0+cu113
+      - torchvision==0.11.1+cu113
+      - numpy==1.24.3
+      - opencv-python==4.11.0.86
+      - PyYAML==6.0.2
+      - tqdm==4.67.1
+      - einops==0.3.0
+      - local-attention==1.2.1
+      - pytest==7.4.4
+      - setuptools==68.2.2
+      - wheel==0.44.0
