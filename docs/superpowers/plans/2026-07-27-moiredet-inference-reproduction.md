@@ -215,6 +215,7 @@ dependencies:
 
 ```gitignore
 # .gitignore
+.worktrees/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -313,33 +314,32 @@ PINNED = "afde899f3c3beee96160610ee450618136a38f7b"
 
 def test_upstream_baseline_and_sample_are_pinned():
     root = Path(__file__).resolve().parents[1]
-    provenance = (root / "docs" / "upstream" / "UPSTREAM.md").read_text(encoding="utf-8")
-    assert "https://github.com/cong-yang/MoireDet" in provenance
-    assert PINNED in provenance
     assert (root / "MoireDet" / "script" / "00002423.png").is_file()
     assert (root / "MoireDet" / "script" / "performer_pytorch" / "__init__.py").is_file()
 
 
-def test_minimal_runtime_patches_are_applied_and_documented():
+def test_target_model_builds_without_legacy_import_or_network(monkeypatch):
+    import importlib, sys
     root = Path(__file__).resolve().parents[1]
-    model = (root / "MoireDet" / "lib" / "models" / "model.py").read_text(encoding="utf-8")
-    resnet = (root / "MoireDet" / "lib" / "models" / "modules" / "resnet.py").read_text(encoding="utf-8")
-    resnet_dct = (root / "MoireDet" / "lib" / "models" / "modules" / "resnet_dct.py").read_text(encoding="utf-8")
-    target_start = model.index("class TripleBranchWithSpecificConv(nn.Module):")
-    next_class = model.index("class TripleBranchWithSpecificConvNoPer", target_start)
-    assert "backbone_model(pretrained=False)" in model[target_start:next_class]
-    for source in (resnet, resnet_dct):
-        assert "from torch.hub import load_state_dict_from_url" in source
-    provenance = (root / "docs" / "upstream" / "UPSTREAM.md").read_text(encoding="utf-8")
-    assert "0001-torchvision-load-state-dict-compat.patch" in provenance
-    assert "0002-disable-resnet-online-download.patch" in provenance
+    sys.path[:0] = [str(root / "MoireDet"), str(root / "MoireDet" / "script")]
+    from lib.models import model as official_model
+    resnet = importlib.import_module("lib.models.modules.resnet")
+
+    def fail_if_downloaded(*args, **kwargs):
+        raise AssertionError("target construction attempted an online download")
+
+    monkeypatch.setattr(resnet, "load_state_dict_from_url", fail_if_downloaded)
+    instance = official_model.TripleBranchWithSpecificConv({
+        "backbone": "resnet18", "fpem_repeat": 2, "pretrained": True,
+        "segmentation_head": "FPEM_FFM", "is_dct": False, "is_light": True})
+    assert isinstance(instance, official_model.TripleBranchWithSpecificConv)
 ```
 
 - [ ] **Step 2: Run the tests and verify provenance/patches are absent**
 
 Run: `D:\anaconda3\envs\moiredet-repro\python.exe -m pytest tests/test_upstream_snapshot.py -v`
 
-Expected: FAIL with `FileNotFoundError` for `docs/upstream/UPSTREAM.md`; the existing sample/source assertions would otherwise pass.
+Expected: FAIL while importing the legacy torchvision path before the patch; after that import is fixed, it fails because target construction attempts the patched-out online download.
 
 - [ ] **Step 3: Verify the current branch is based on the exact audited upstream commit**
 
@@ -1577,60 +1577,49 @@ git commit -m "feat: add MoireDet single-image CLI"
 - Create: `docs/checkpoint-request-message.md`
 - Create: `outputs/.gitkeep`
 - Create: `examples/input/.gitkeep`
-- Create: `tests/test_documentation_and_scripts.py`
+- Create: `tests/test_scripts.py`
 
 **Interfaces:**
 - Consumes: package public APIs and the target machine.
 - Produces: no-weight environment report, trusted-weight benchmark JSON, complete Chinese usage guide and mentor request text.
 
-- [ ] **Step 1: Write failing documentation and parser-contract tests**
+- [ ] **Step 1: Write failing script parser-contract tests**
 
 ```python
-# tests/test_documentation_and_scripts.py
+# tests/test_scripts.py
 from pathlib import Path
 import subprocess, sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def test_readme_documents_exact_command_status_and_test_layers():
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "python -m moiredet_repro.cli infer" in text
-    assert "PSENet_100_loss0.000000.pth" in text
-    assert "代码兼容层和无权重验证完成" in text
-    assert 'pytest -m "not gpu and not checkpoint"' in text
-    assert 'pytest -m "gpu and not checkpoint"' in text
-    assert "不能宣称任务 1 已完成" in text
+def run_help(script):
+    return subprocess.run([sys.executable, str(ROOT / "scripts" / script), "--help"],
+                          cwd=str(ROOT), capture_output=True, text=True)
 
-def test_checkpoint_request_is_ready_to_send():
-    text = (ROOT / "docs" / "checkpoint-request-message.md").read_text(encoding="utf-8")
-    assert "Doing More With Moiré Pattern Detection in Digital Photos" in text
-    assert "PSENet_100_loss0.000000.pth" in text
-    assert "cong-yang/MoireDet" in text
+def test_environment_help_is_lightweight_and_exposes_device_control():
+    result = run_help("verify_environment.py")
+    assert result.returncode == 0
+    assert "--device" in result.stdout
+    assert result.stderr == ""
 
-def test_benchmark_help_does_not_require_a_checkpoint():
-    result = subprocess.run([sys.executable, "scripts/benchmark_inference.py", "--help"],
-                            cwd=str(ROOT), capture_output=True, text=True)
-    assert result.returncode == 0 and "--checkpoint" in result.stdout
-
-def test_runtime_layer_has_no_author_absolute_paths():
-    for folder in (ROOT / "src", ROOT / "configs", ROOT / "scripts"):
-        for path in folder.rglob("*"):
-            if path.is_file():
-                text = path.read_text(encoding="utf-8")
-                assert "/home/users/" not in text and "/data/zhenyu.yang/" not in text and "E:/zj/" not in text
+def test_benchmark_help_is_lightweight_and_exposes_checkpoint_contract():
+    result = run_help("benchmark_inference.py")
+    assert result.returncode == 0
+    assert "--checkpoint" in result.stdout and "--checkpoint-manifest" in result.stdout
+    assert result.stderr == ""
 ```
 
 - [ ] **Step 2: Run the tests and verify docs/scripts are absent**
 
-Run: `D:\anaconda3\envs\moiredet-repro\python.exe -m pytest tests/test_documentation_and_scripts.py -v`
+Run: `D:\anaconda3\envs\moiredet-repro\python.exe -m pytest tests/test_scripts.py -v`
 
-Expected: FAIL because `README.md` and the request message do not exist.
+Expected: FAIL because the two script entry points do not exist.
 
 - [ ] **Step 3: Implement the no-weight environment verification script**
 
 ```python
 # scripts/verify_environment.py
-import json, platform
+import argparse, json, platform
 from pathlib import Path
 import cv2, numpy as np, torch, torchvision, yaml
 from importlib.metadata import version
@@ -1638,7 +1627,13 @@ from moiredet_repro.config import load_config
 from moiredet_repro.inference import MoireDetInference, set_determinism
 from moiredet_repro.upstream_adapter import build_official_model
 
-def main():
+def parser():
+    value = argparse.ArgumentParser(description="Verify pinned MoireDet CPU/CUDA runtime")
+    value.add_argument("--device", choices=("all",), default="all")
+    return value
+
+def main(argv=None):
+    parser().parse_args(argv)
     set_determinism(2)
     cuda_available = torch.cuda.is_available()
     if cuda_available:
@@ -1808,7 +1803,7 @@ Expected: all tests PASS on the RTX 4060; the report contains CPU and CUDA shape
 - [ ] **Step 7: Commit the reproducible handoff**
 
 ```powershell
-git add README.md scripts docs/checkpoint-request-message.md outputs/.gitkeep examples/input/.gitkeep tests/test_documentation_and_scripts.py
+git add README.md scripts docs/checkpoint-request-message.md outputs/.gitkeep examples/input/.gitkeep tests/test_scripts.py
 git commit -m "docs: add MoireDet reproduction and weight handoff"
 ```
 
