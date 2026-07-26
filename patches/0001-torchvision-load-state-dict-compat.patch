@@ -1,0 +1,26 @@
+diff --git a/MoireDet/lib/models/modules/resnet.py b/MoireDet/lib/models/modules/resnet.py
+index 8d6948b..f855dfb 100644
+--- a/MoireDet/lib/models/modules/resnet.py
++++ b/MoireDet/lib/models/modules/resnet.py
+@@ -2,4 +2,7 @@
+ # @Time    : 2019/8/23 21:55
+ # @Author  : zhoujun
+ import torch.nn as nn
+-from torchvision.models.utils import load_state_dict_from_url
++try:
++    from torchvision.models.utils import load_state_dict_from_url
++except ModuleNotFoundError:
++    from torch.hub import load_state_dict_from_url
+diff --git a/MoireDet/lib/models/modules/resnet_dct.py b/MoireDet/lib/models/modules/resnet_dct.py
+index 0aae224..2dfa473 100644
+--- a/MoireDet/lib/models/modules/resnet_dct.py
++++ b/MoireDet/lib/models/modules/resnet_dct.py
+@@ -2,4 +2,7 @@
+ # @Time    : 2019/8/23 21:55
+ # @Author  : zhoujun
+ import torch.nn as nn
+-from torchvision.models.utils import load_state_dict_from_url
++try:
++    from torchvision.models.utils import load_state_dict_from_url
++except ModuleNotFoundError:
++    from torch.hub import load_state_dict_from_url
