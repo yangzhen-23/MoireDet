@@ -94,17 +94,70 @@ def make_comparison(original_bgr: np.ndarray, moire_map: np.ndarray) -> np.ndarr
     return np.concatenate([original_bgr, cv2.cvtColor(moire_map, cv2.COLOR_GRAY2BGR)], axis=1)
 
 
-def _write_png(path: Path, image: np.ndarray) -> None:
+def _file_identity(path: Path):
+    status = path.stat()
+    return status.st_dev, status.st_ino
+
+
+def _remove_owned_file(path: Path, identity) -> None:
+    """Remove a file only if it is the same file this invocation created."""
+    try:
+        if _file_identity(path) == identity:
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _write_exclusive(path: Path, writer):
+    """Write one artifact without replacing another process's target file."""
+    identity = None
+    try:
+        handle = path.open("xb")
+        identity = _file_identity(path)
+        with handle:
+            writer(handle)
+    except FileExistsError as exc:
+        raise OutputError("refusing to overwrite existing output: {}".format(path.name)) from exc
+    except Exception as exc:
+        if identity is not None:
+            _remove_owned_file(path, identity)
+        if isinstance(exc, OutputError):
+            raise
+        raise OutputError("could not write {}".format(path.name)) from exc
+    return path, identity
+
+
+def _write_bytes_exclusive(path: Path, data: bytes):
+    def write_all(handle):
+        written = handle.write(data)
+        if written != len(data):
+            raise OSError("incomplete write")
+
+    return _write_exclusive(path, write_all)
+
+
+def _write_png(path: Path, image: np.ndarray):
     try:
         ok, encoded = cv2.imencode(".png", image)
     except cv2.error as exc:
         raise OutputError("OpenCV could not encode {}".format(path.name)) from exc
     if not ok:
         raise OutputError("OpenCV could not encode {}".format(path.name))
+    return _write_bytes_exclusive(path, encoded.tobytes())
+
+
+def _write_npy(path: Path, prediction: np.ndarray):
+    return _write_exclusive(
+        path, lambda handle: np.save(handle, prediction, allow_pickle=False)
+    )
+
+
+def _write_json(path: Path, metadata: Dict):
     try:
-        encoded.tofile(str(path))
-    except OSError as exc:
-        raise OutputError("could not write {}".format(path.name)) from exc
+        serialized = json.dumps(metadata, ensure_ascii=False, indent=2, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise OutputError("could not serialize {}".format(path.name)) from exc
+    return _write_bytes_exclusive(path, serialized.encode("utf-8"))
 
 
 def write_output_bundle(
@@ -126,30 +179,15 @@ def write_output_bundle(
 
     created = []
     try:
-        prediction_path = output / "prediction.npy"
-        created.append(prediction_path)
-        with prediction_path.open("xb") as handle:
-            np.save(handle, prediction, allow_pickle=False)
+        created.append(_write_npy(output / "prediction.npy", prediction))
 
-        map_path = output / "moire_map.png"
-        created.append(map_path)
-        _write_png(map_path, moire_map)
+        created.append(_write_png(output / "moire_map.png", moire_map))
 
-        comparison_path = output / "comparison.png"
-        created.append(comparison_path)
-        _write_png(comparison_path, comparison)
+        created.append(_write_png(output / "comparison.png", comparison))
 
-        run_path = output / "run.json"
-        created.append(run_path)
-        with run_path.open("x", encoding="utf-8") as handle:
-            handle.write(json.dumps(metadata, ensure_ascii=False, indent=2, allow_nan=False))
-    except (OutputError, OSError, TypeError, ValueError) as exc:
-        for artifact in reversed(created):
-            try:
-                artifact.unlink()
-            except OSError:
-                pass
-        if isinstance(exc, OutputError):
-            raise
-        raise OutputError("could not write complete output bundle") from exc
+        created.append(_write_json(output / "run.json", metadata))
+    except OutputError:
+        for artifact, identity in reversed(created):
+            _remove_owned_file(artifact, identity)
+        raise
     return {name: (output / name).resolve() for name in TARGETS}

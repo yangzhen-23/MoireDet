@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+import moiredet_repro.rendering as rendering
 from moiredet_repro.checkpoint import CheckpointInfo, CheckpointManifest
 from moiredet_repro.config import load_config
 from moiredet_repro.errors import OutputError
@@ -91,6 +92,68 @@ def test_bundle_removes_artifacts_created_before_png_write_failure(tmp_path, mon
 
     monkeypatch.setattr(cv2, "imencode", fail_encoding)
     with pytest.raises(OutputError, match="OpenCV could not encode"):
+        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+
+    assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
+
+
+def test_bundle_preserves_target_that_appears_after_preflight(tmp_path, monkeypatch):
+    prediction = np.zeros((320, 320), dtype=np.float32)
+    original = np.zeros((5, 9, 3), dtype=np.uint8)
+    external_bytes = b"user-created-after-preflight"
+
+    def create_external_target_then_fail(path, image):
+        path.write_bytes(external_bytes)
+        raise OutputError("injected PNG write failure")
+
+    monkeypatch.setattr(rendering, "_write_png", create_external_target_then_fail)
+    with pytest.raises(OutputError, match="injected PNG write failure"):
+        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+
+    assert (tmp_path / "moire_map.png").read_bytes() == external_bytes
+    assert not (tmp_path / "prediction.npy").exists()
+    assert not (tmp_path / "comparison.png").exists()
+    assert not (tmp_path / "run.json").exists()
+
+
+def test_bundle_removes_only_its_partial_npy_file_when_npy_write_fails(tmp_path, monkeypatch):
+    prediction = np.zeros((320, 320), dtype=np.float32)
+    original = np.zeros((5, 9, 3), dtype=np.uint8)
+
+    def write_partial_npy_then_fail(handle, array, allow_pickle):
+        handle.write(b"partial-npy")
+        raise OSError("injected NPY write failure")
+
+    monkeypatch.setattr(np, "save", write_partial_npy_then_fail)
+    with pytest.raises(OutputError, match="could not write prediction.npy"):
+        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+
+    assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
+
+
+def test_bundle_removes_only_its_partial_json_file_when_json_write_fails(tmp_path, monkeypatch):
+    prediction = np.zeros((320, 320), dtype=np.float32)
+    original = np.zeros((5, 9, 3), dtype=np.uint8)
+    original_open = Path.open
+
+    class FailingJsonFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def write(self, value):
+            raise OSError("injected JSON write failure")
+
+    def fail_json_open(path, mode="r", *args, **kwargs):
+        if path.name == "run.json" and mode == "xb":
+            path.touch(exist_ok=False)
+            return FailingJsonFile()
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_json_open)
+    with pytest.raises(OutputError, match="could not write run.json"):
         write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
 
     assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
