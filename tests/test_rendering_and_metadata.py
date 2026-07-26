@@ -54,16 +54,19 @@ def test_map_and_comparison_restore_original_dimensions():
     "name", ["prediction.npy", "moire_map.png", "comparison.png", "run.json"]
 )
 def test_preflight_refuses_any_existing_target(tmp_path, name):
-    old = tmp_path / name
+    output = tmp_path / "bundle"
+    output.mkdir()
+    old = output / name
     old.write_bytes(b"keep")
 
     with pytest.raises(OutputError, match="refusing to overwrite"):
-        preflight_output_dir(tmp_path)
+        preflight_output_dir(output)
 
     assert old.read_bytes() == b"keep"
 
 
 def test_bundle_preserves_raw_prediction_and_schema(tmp_path):
+    output = tmp_path / "bundle"
     prediction = np.linspace(-1, 1, 320 * 320, dtype=np.float32).reshape(320, 320)
     original = np.zeros((5, 9, 3), dtype=np.uint8)
     metadata = {
@@ -76,14 +79,18 @@ def test_bundle_preserves_raw_prediction_and_schema(tmp_path):
         },
     }
 
-    write_output_bundle(tmp_path, original, prediction, metadata, 1e-12)
+    write_output_bundle(output, original, prediction, metadata, 1e-12)
 
-    assert np.array_equal(np.load(str(tmp_path / "prediction.npy")), prediction)
-    assert cv2.imdecode(np.fromfile(str(tmp_path / "moire_map.png"), np.uint8), 0).shape == (5, 9)
-    assert json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))["schema_version"] == 1
+    assert np.array_equal(np.load(str(output / "prediction.npy")), prediction)
+    assert cv2.imdecode(np.fromfile(str(output / "moire_map.png"), np.uint8), 0).shape == (5, 9)
+    assert json.loads((output / "run.json").read_text(encoding="utf-8"))["schema_version"] == 1
+    assert sorted(path.name for path in output.iterdir()) == [
+        "comparison.png", "moire_map.png", "prediction.npy", "run.json"
+    ]
 
 
 def test_bundle_removes_artifacts_created_before_png_write_failure(tmp_path, monkeypatch):
+    output = tmp_path / "bundle"
     prediction = np.zeros((320, 320), dtype=np.float32)
     original = np.zeros((5, 9, 3), dtype=np.uint8)
 
@@ -92,31 +99,32 @@ def test_bundle_removes_artifacts_created_before_png_write_failure(tmp_path, mon
 
     monkeypatch.setattr(cv2, "imencode", fail_encoding)
     with pytest.raises(OutputError, match="OpenCV could not encode"):
-        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+        write_output_bundle(output, original, prediction, {"schema_version": 1}, 1e-12)
 
-    assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
+    assert not output.exists()
 
 
-def test_bundle_preserves_target_that_appears_after_preflight(tmp_path, monkeypatch):
+def test_bundle_preserves_external_directory_that_appears_before_publication(tmp_path, monkeypatch):
+    output = tmp_path / "bundle"
     prediction = np.zeros((320, 320), dtype=np.float32)
     original = np.zeros((5, 9, 3), dtype=np.uint8)
     external_bytes = b"user-created-after-preflight"
 
-    def create_external_target_then_fail(path, image):
-        path.write_bytes(external_bytes)
-        raise OutputError("injected PNG write failure")
+    def create_external_directory_then_fail(stage, final):
+        final.mkdir()
+        (final / "external.bin").write_bytes(external_bytes)
+        raise OutputError("injected publication collision")
 
-    monkeypatch.setattr(rendering, "_write_png", create_external_target_then_fail)
-    with pytest.raises(OutputError, match="injected PNG write failure"):
-        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+    monkeypatch.setattr(rendering, "_publish_stage", create_external_directory_then_fail)
+    with pytest.raises(OutputError, match="injected publication collision"):
+        write_output_bundle(output, original, prediction, {"schema_version": 1}, 1e-12)
 
-    assert (tmp_path / "moire_map.png").read_bytes() == external_bytes
-    assert not (tmp_path / "prediction.npy").exists()
-    assert not (tmp_path / "comparison.png").exists()
-    assert not (tmp_path / "run.json").exists()
+    assert (output / "external.bin").read_bytes() == external_bytes
+    assert sorted(path.name for path in output.iterdir()) == ["external.bin"]
 
 
 def test_bundle_removes_only_its_partial_npy_file_when_npy_write_fails(tmp_path, monkeypatch):
+    output = tmp_path / "bundle"
     prediction = np.zeros((320, 320), dtype=np.float32)
     original = np.zeros((5, 9, 3), dtype=np.uint8)
 
@@ -126,12 +134,13 @@ def test_bundle_removes_only_its_partial_npy_file_when_npy_write_fails(tmp_path,
 
     monkeypatch.setattr(np, "save", write_partial_npy_then_fail)
     with pytest.raises(OutputError, match="could not write prediction.npy"):
-        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+        write_output_bundle(output, original, prediction, {"schema_version": 1}, 1e-12)
 
-    assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
+    assert not output.exists()
 
 
 def test_bundle_removes_only_its_partial_json_file_when_json_write_fails(tmp_path, monkeypatch):
+    output = tmp_path / "bundle"
     prediction = np.zeros((320, 320), dtype=np.float32)
     original = np.zeros((5, 9, 3), dtype=np.uint8)
     original_open = Path.open
@@ -154,9 +163,24 @@ def test_bundle_removes_only_its_partial_json_file_when_json_write_fails(tmp_pat
 
     monkeypatch.setattr(Path, "open", fail_json_open)
     with pytest.raises(OutputError, match="could not write run.json"):
-        write_output_bundle(tmp_path, original, prediction, {"schema_version": 1}, 1e-12)
+        write_output_bundle(output, original, prediction, {"schema_version": 1}, 1e-12)
 
-    assert not any((tmp_path / name).exists() for name in ("prediction.npy", "moire_map.png", "comparison.png", "run.json"))
+    assert not output.exists()
+
+
+def test_bundle_rejects_corrupt_npy_even_when_save_returns_success(tmp_path, monkeypatch):
+    output = tmp_path / "bundle"
+    prediction = np.zeros((320, 320), dtype=np.float32)
+    original = np.zeros((5, 9, 3), dtype=np.uint8)
+
+    def write_partial_npy(handle, array, allow_pickle):
+        handle.write(b"partial")
+
+    monkeypatch.setattr(np, "save", write_partial_npy)
+    with pytest.raises(OutputError, match="invalid prediction.npy"):
+        write_output_bundle(output, original, prediction, {"schema_version": 1}, 1e-12)
+
+    assert not output.exists()
 
 
 def test_fixed_metadata_schema_has_every_required_key():

@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 import json
 import math
+import os
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Dict, Tuple
 
 import cv2
@@ -23,18 +26,15 @@ class PredictionStats:
 
 
 def preflight_output_dir(path: Path) -> Path:
-    """Return a writable output directory only when no target would be replaced."""
+    """Reserve a new output leaf while checking that its parent is writable."""
     output = Path(path)
-    conflicts = [name for name in TARGETS if (output / name).exists()]
-    if conflicts:
-        raise OutputError(
-            "refusing to overwrite existing output(s): {}".format(", ".join(conflicts))
-        )
+    if output.exists():
+        raise OutputError("refusing to overwrite existing output directory: {}".format(output))
     try:
-        output.mkdir(parents=True, exist_ok=True)
-        probe = output / ".write-probe"
-        probe.write_bytes(b"")
-        probe.unlink()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        handle, probe_name = tempfile.mkstemp(prefix=".moiredet-write-probe-", dir=str(output.parent))
+        os.close(handle)
+        Path(probe_name).unlink()
     except OSError as exc:
         raise OutputError("output directory is not writable: {}".format(output)) from exc
     return output
@@ -94,70 +94,91 @@ def make_comparison(original_bgr: np.ndarray, moire_map: np.ndarray) -> np.ndarr
     return np.concatenate([original_bgr, cv2.cvtColor(moire_map, cv2.COLOR_GRAY2BGR)], axis=1)
 
 
-def _file_identity(path: Path):
-    status = path.stat()
-    return status.st_dev, status.st_ino
-
-
-def _remove_owned_file(path: Path, identity) -> None:
-    """Remove a file only if it is the same file this invocation created."""
+def _write_exclusive(path: Path, writer) -> None:
+    """Write one artifact only inside this invocation's private staging directory."""
     try:
-        if _file_identity(path) == identity:
-            path.unlink()
-    except OSError:
-        pass
-
-
-def _write_exclusive(path: Path, writer):
-    """Write one artifact without replacing another process's target file."""
-    identity = None
-    try:
-        handle = path.open("xb")
-        identity = _file_identity(path)
-        with handle:
+        with path.open("xb") as handle:
             writer(handle)
     except FileExistsError as exc:
-        raise OutputError("refusing to overwrite existing output: {}".format(path.name)) from exc
+        raise OutputError("staging output already exists: {}".format(path.name)) from exc
     except Exception as exc:
-        if identity is not None:
-            _remove_owned_file(path, identity)
         if isinstance(exc, OutputError):
             raise
         raise OutputError("could not write {}".format(path.name)) from exc
-    return path, identity
 
 
-def _write_bytes_exclusive(path: Path, data: bytes):
+def _write_bytes_exclusive(path: Path, data: bytes) -> None:
     def write_all(handle):
         written = handle.write(data)
         if written != len(data):
             raise OSError("incomplete write")
 
-    return _write_exclusive(path, write_all)
+    _write_exclusive(path, write_all)
 
 
-def _write_png(path: Path, image: np.ndarray):
+def _write_png(path: Path, image: np.ndarray) -> None:
     try:
         ok, encoded = cv2.imencode(".png", image)
     except cv2.error as exc:
         raise OutputError("OpenCV could not encode {}".format(path.name)) from exc
     if not ok:
         raise OutputError("OpenCV could not encode {}".format(path.name))
-    return _write_bytes_exclusive(path, encoded.tobytes())
+    _write_bytes_exclusive(path, encoded.tobytes())
+    try:
+        decoded = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    except (OSError, ValueError, cv2.error) as exc:
+        raise OutputError("invalid {}".format(path.name)) from exc
+    if decoded is None or decoded.shape != image.shape or not np.array_equal(decoded, image):
+        raise OutputError("invalid {}".format(path.name))
 
 
-def _write_npy(path: Path, prediction: np.ndarray):
-    return _write_exclusive(
-        path, lambda handle: np.save(handle, prediction, allow_pickle=False)
-    )
+def _write_npy(path: Path, prediction: np.ndarray) -> None:
+    _write_exclusive(path, lambda handle: np.save(handle, prediction, allow_pickle=False))
+    try:
+        restored = np.load(str(path), allow_pickle=False)
+    except (OSError, ValueError) as exc:
+        raise OutputError("invalid prediction.npy") from exc
+    if (
+        restored.dtype != np.float32
+        or restored.shape != (320, 320)
+        or not np.array_equal(restored, prediction)
+    ):
+        raise OutputError("invalid prediction.npy")
 
 
-def _write_json(path: Path, metadata: Dict):
+def _write_json(path: Path, metadata: Dict) -> None:
     try:
         serialized = json.dumps(metadata, ensure_ascii=False, indent=2, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise OutputError("could not serialize {}".format(path.name)) from exc
-    return _write_bytes_exclusive(path, serialized.encode("utf-8"))
+    _write_bytes_exclusive(path, serialized.encode("utf-8"))
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise OutputError("invalid run.json") from exc
+
+
+def _create_stage(output: Path) -> Path:
+    try:
+        return Path(tempfile.mkdtemp(prefix=".{}-staging-".format(output.name), dir=str(output.parent)))
+    except OSError as exc:
+        raise OutputError("could not create private staging directory") from exc
+
+
+def _cleanup_stage(stage: Path) -> None:
+    try:
+        shutil.rmtree(str(stage))
+    except OSError:
+        pass
+
+
+def _publish_stage(stage: Path, output: Path) -> None:
+    try:
+        stage.rename(output)
+    except OSError as exc:
+        raise OutputError(
+            "refusing to overwrite output directory during publication: {}".format(output)
+        ) from exc
 
 
 def write_output_bundle(
@@ -167,7 +188,7 @@ def write_output_bundle(
     metadata: Dict,
     epsilon: float,
 ) -> Dict[str, Path]:
-    """Write all fixed output artifacts, deleting artifacts created if writing fails."""
+    """Publish a complete fixed bundle to a new output directory in one rename."""
     output = preflight_output_dir(output_dir)
     height, width = original_bgr.shape[:2]
     moire_map, stats = render_moire_map(prediction, width, height, epsilon)
@@ -177,17 +198,19 @@ def write_output_bundle(
             {"min": stats.minimum, "max": stats.maximum, "dynamic_range": stats.dynamic_range}
         )
 
-    created = []
+    stage = _create_stage(output)
     try:
-        created.append(_write_npy(output / "prediction.npy", prediction))
-
-        created.append(_write_png(output / "moire_map.png", moire_map))
-
-        created.append(_write_png(output / "comparison.png", comparison))
-
-        created.append(_write_json(output / "run.json", metadata))
+        _write_npy(stage / "prediction.npy", prediction)
+        _write_png(stage / "moire_map.png", moire_map)
+        _write_png(stage / "comparison.png", comparison)
+        _write_json(stage / "run.json", metadata)
+        if {item.name for item in stage.iterdir()} != set(TARGETS):
+            raise OutputError("staging directory does not contain the fixed output bundle")
+        _publish_stage(stage, output)
     except OutputError:
-        for artifact, identity in reversed(created):
-            _remove_owned_file(artifact, identity)
+        _cleanup_stage(stage)
         raise
+    except Exception as exc:
+        _cleanup_stage(stage)
+        raise OutputError("could not build complete output bundle") from exc
     return {name: (output / name).resolve() for name in TARGETS}
