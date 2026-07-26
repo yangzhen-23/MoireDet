@@ -27,3 +27,8 @@ Result: 4 collected, 4 `SKIPPED`, 0 passed and 0 xfailed. Every case reported th
 ## Remaining external blocker
 
 No trusted checkpoint or provenance manifest was supplied, and no weight was downloaded, searched for, loaded, or fabricated. Therefore strict CPU loading, CUDA output generation, user-image inference, visual inspection, benchmark measurements, and RTX 4060 formal acceptance are deliberately not claimed. The later operator commands and visual checklist are in `README.md`.
+
+## Fix Round 1 - README acceptance-boundary clarification
+
+- Restored the CLI output safety contract: `--output` must be a fresh, nonexistent directory leaf; any existing file or directory is refused; a successful atomic publication creates exactly the four fixed artifacts. README now directs operators to use a new timestamped output path for every run.
+- Clarified the checkpoint environment gate precisely: zero or partial checkpoint configuration is an explicit skip. Validation and failure semantics begin only after both `MOIREDET_CHECKPOINT` and `MOIREDET_CHECKPOINT_MANIFEST` are set; invalid configured paths or content then fail.

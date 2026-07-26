@@ -40,7 +40,7 @@ D:\anaconda3\envs\moiredet-repro\python.exe -m pytest -m checkpoint -v -rs
 D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\benchmark_inference.py --input .\MoireDet\script\00002423.png --checkpoint $env:MOIREDET_CHECKPOINT --checkpoint-manifest $env:MOIREDET_CHECKPOINT_MANIFEST --output .\outputs\acceptance\benchmark.json --device cuda
 ```
 
-该 gate 在未设置 `MOIREDET_CHECKPOINT` 和 `MOIREDET_CHECKPOINT_MANIFEST` 时会明确 `SKIPPED`；一旦变量已设置，缺失、来源无效、哈希不匹配或严格 state-dict 不匹配都会失败，绝不静默跳过。用户图片仅控制用户图片用例。正式验收还要求实际 CUDA 设备为 RTX 4060。
+该 gate 只有在 `MOIREDET_CHECKPOINT` 和 `MOIREDET_CHECKPOINT_MANIFEST` **都已设置**时才开始验证：两者均未设置或只设置其中一个都会明确 `SKIPPED`；两者都已设置后，缺失路径、来源无效、哈希不匹配或严格 state-dict 不匹配都会失败，绝不静默跳过。用户图片仅控制用户图片用例。正式验收还要求实际 CUDA 设备为 RTX 4060。
 
 在可信输入和 RTX 4060 到位后，验收会严格 CPU 加载权重，再对官方样图和可选用户图执行 CUDA 推理；每个输出目录必须恰好包含：
 
@@ -48,6 +48,8 @@ D:\anaconda3\envs\moiredet-repro\python.exe .\scripts\benchmark_inference.py --i
 - `moire_map.png`：恢复到输入尺寸的灰度图；
 - `comparison.png`：输入和检测图的并排图；
 - `run.json`：输入、上游提交、已验证权重、预测范围、性能和输出清单。
+
+CLI 的 `--output` 必须是一个新的、尚不存在的目录叶节点；该路径上已有任何文件或目录都会被拒绝，避免覆盖既有结果。成功发布会原子地创建这个叶目录，并且其中恰好只有上述四个文件。每次运行请使用新的带时间戳路径，例如 `outputs\acceptance\2026-07-27T153000-sample`，而不要复用旧输出目录。
 
 基准固定为 5 次预热和 20 次计时，并要求正的延迟以及两项峰值显存字段。重复推理必须满足 `rtol=1e-5, atol=1e-6`。
 
