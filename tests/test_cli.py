@@ -53,6 +53,25 @@ def test_output_conflict_stops_before_model_build(tmp_path, monkeypatch):
     assert (output / "run.json").read_text() == "keep"
 
 
+def test_unexpected_infer_exception_propagates_for_traceback(monkeypatch):
+    def raise_programming_error(args):
+        raise RuntimeError("synthetic programmer defect")
+
+    monkeypatch.setattr(cli, "run_infer", raise_programming_error)
+    with pytest.raises(RuntimeError, match="synthetic programmer defect"):
+        cli.main(
+            [
+                "infer",
+                "--input",
+                "a.png",
+                "--checkpoint",
+                "model.pth",
+                "--output",
+                "out",
+            ]
+        )
+
+
 def test_fake_service_end_to_end_writes_and_reports_all_outputs(tmp_path, monkeypatch, capsys):
     import numpy as np
     import torch

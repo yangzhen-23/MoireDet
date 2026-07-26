@@ -29,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_infer(args) -> Dict[str, Path]:
     """Run the trusted end-to-end pipeline and atomically publish its bundle."""
+    # This early preflight provides fail-fast CLI behavior; the writer repeats it
+    # deliberately so callers of write_output_bundle() receive the same protection.
     output = preflight_output_dir(args.output)
     config = load_config(args.config)
     set_determinism(2)
@@ -65,9 +67,6 @@ def main(argv=None) -> int:
     except MoireDetReproError as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 2
-    except Exception as exc:
-        print("UNEXPECTED ERROR: {}".format(exc), file=sys.stderr)
-        return 1
     return 1
 
 
