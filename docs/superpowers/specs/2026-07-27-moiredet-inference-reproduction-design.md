@@ -82,6 +82,8 @@ moire_reproduction/
   upstream/
     MoireDet/
     UPSTREAM.md
+  patches/
+    0001-disable-resnet-online-download.patch
   src/
     moiredet_repro/
       __init__.py
@@ -90,6 +92,7 @@ moire_reproduction/
       inference.py
       preprocessing.py
       rendering.py
+      upstream_adapter.py
   configs/
     inference.yaml
   examples/
@@ -98,7 +101,9 @@ moire_reproduction/
   scripts/
   weights/
     README.md
+    checkpoint.example.json
   outputs/
+  pyproject.toml
   environment.yml
   README.md
   .gitignore
@@ -112,24 +117,33 @@ moire_reproduction/
 
 `UPSTREAM.md` 记录仓库 URL、提交哈希、获取日期和已做的完整性检查。上游快照通过 Git archive 导出，不携带嵌套 `.git` 目录。若必须对上游代码做最小兼容修改，每一处修改都以补丁文件或清晰的提交记录呈现，不能无记录地改写核心网络。
 
+已确认目标类在构造注意力分支时硬编码 `backbone_model(pretrained=True)`，会隐式下载 ImageNet 权重。项目通过 `patches/0001-disable-resnet-online-download.patch` 仅把 `TripleBranchWithSpecificConv` 中这一处改为 `pretrained=False`。严格加载完整 MoireDet 状态字典后，初始化值会被检查点覆盖；若任何参数未覆盖，严格加载直接失败，因此该补丁不改变已验收检查点的推理参数。补丁内容、应用命令和应用后的文件哈希写入 `UPSTREAM.md`。
+
+`upstream_adapter.py` 从已安装包位置解析仓库根目录，校验 `upstream/MoireDet/lib` 存在后，将仓库内的 `upstream/MoireDet` 作为唯一的上游导入根加入当前进程搜索路径，再导入作者的 `lib.models`。它不依赖当前工作目录、环境变量或作者绝对路径；首版只支持从完整源码检出目录执行，缺少上游快照时明确失败。
+
 ### 6.2 环境层
 
-环境层负责创建独立 `moiredet-repro` Conda 环境，并冻结以下类别的实际验证版本：Python、PyTorch、torchvision、OpenCV、NumPy、PyYAML、tqdm、einops 与 local-attention。
+环境层负责创建独立 `moiredet-repro` Conda 环境，并冻结以下类别的实际验证版本：Python、PyTorch、torchvision、OpenCV、NumPy、PyYAML、tqdm、einops 与 local-attention。项目使用 `pyproject.toml` 声明 `src/` 包布局；环境建立后执行 `python -m pip install -e . --no-deps`，确保从仓库根目录可运行模块命令，第三方依赖仍只由 `environment.yml` 管理。
 
 环境验证包含两步：先执行最小 CUDA 张量运算，再执行 MoireDet 随机输入前向。仅“能够识别 GPU”不算通过。
 
 ### 6.3 检查点管理
 
+`checkpoint.py` 接收检查点文件和一份来源清单。来源清单默认使用 `<checkpoint-path>.json`（例如 `model.pth.json`），也允许由 `--checkpoint-manifest` 显式指定；至少包含文件名、来源类型、来源说明或 URL、获取日期、来源证据说明和预期 SHA-256。正式推理不接受缺失必填字段或哈希不一致的来源清单。仓库提供 `weights/checkpoint.example.json` 模板，但不提交权重本体。
+
+可信性与完整性分开判断：来源必须先属于第 2.4 节允许的可信渠道，来源清单保存可复核的作者 URL、作者回复或导师提供记录；SHA-256 随后在首次取得文件时计算，用于锁定该字节副本，不能单独证明来源可信。只有“来源证据合格”和“实际哈希匹配”同时成立，运行记录才标记 `checkpoint_verified=true`。
+
 `checkpoint.py` 负责：
 
 - 检查文件是否存在且可读；
 - 先映射到 CPU，再加载状态字典；
+- 只接受与作者样例一致、含顶层 `state_dict` 映射的检查点封装；
 - 兼容去除 DataParallel 生成的 `module.` 前缀；
 - 以严格模式校验参数名称和形状；
 - 拒绝空文件、HTML 下载页和结构不匹配的文件；
-- 计算 SHA-256，并将来源、文件大小、哈希和获取日期写入运行记录。
+- 计算 SHA-256，与来源清单中的预期值精确比对，并将来源、文件大小、哈希和获取日期写入运行记录。
 
-模型构建时关闭额外的 ImageNet 在线下载，因为完整 MoireDet 检查点应提供所需参数，且离线复现不能依赖隐式网络请求。
+模型构建与检查点加载全过程禁止网络访问，因为完整 MoireDet 检查点应提供所需参数，且离线复现不能依赖隐式网络请求。
 
 ### 6.4 预处理
 
@@ -146,30 +160,30 @@ moire_reproduction/
 
 ### 6.5 推理服务
 
-`inference.py` 封装模型生命周期：构建模型、加载检查点、切换 `eval()`、选择设备并在 `torch.no_grad()` 下执行前向。
+`inference.py` 封装模型生命周期：构建模型、加载检查点、切换 `eval()`、选择设备并在 `torch.no_grad()` 下执行前向。模型契约固定为作者 `sample_code.json` 中的 `TripleBranchWithSpecificConv`，参数固定为 `backbone=resnet18`、`fpem_repeat=2`、`segmentation_head=FPEM_FFM`、`is_dct=false`、`is_light=true`；配置中的 `pretrained=true` 只表示作者原始初始化意图，离线兼容补丁按第 6.1 节处理实际构建。
 
-服务返回统一的二维 `float32` 摩尔纹边缘图，不把显示归一化混入模型结果。首版固定 batch size 为 1，不引入 AMP、模型编译或并发等非必要优化。
+目标模型的返回契约是二元组 `([moire_density], fea_loss)`。输出选择严格沿用作者 `sample_code.py` 的语义，即从 `model(img)[0][0][0][0]` 取得首个样本的二维预测；兼容层对二元组、单元素预测列表、批次/通道维和最终 `320 x 320` 形状逐层显式校验，不以启发式规则猜测其他输出。服务返回统一的二维 `float32` 摩尔纹边缘图，不把显示归一化混入模型结果。首版固定 batch size 为 1，不引入 AMP、模型编译或并发等非必要优化。
 
 ### 6.6 输出与可视化
 
 每次推理生成一个独立输出目录，至少包含：
 
-- `prediction.npy`：未经显示归一化的二维 `float32` 模型输出；
-- `moire_map.png`：供人查看的 8 位灰度检测图；
-- `comparison.png`：左侧原图、右侧检测图；
+- `prediction.npy`：未经显示归一化的 `320 x 320` 二维 `float32` 模型输出；
+- `moire_map.png`：将预测图双线性恢复到输入原始宽高后得到的 8 位灰度检测图；
+- `comparison.png`：左侧原图、右侧同宽高检测图，画布高度等于原图高度、宽度等于原图宽度的两倍；
 - `run.json`：输入路径、设备、环境、上游提交、权重哈希、图像尺寸、耗时和输出范围。
 
-灰度图采用带常量图保护的逐图 min-max 显示归一化。该操作只影响 PNG，不改变 `prediction.npy`。视频阶段将另行设计跨帧固定归一化，避免逐帧 min-max 造成闪烁。
+灰度图采用确定性的逐图 min-max 显示流程：先在原始 `320 x 320` 浮点预测上计算最小值、最大值和动态范围；动态范围小于或等于 `1e-12` 时生成全零图，否则线性映射到 `[0, 255]`；再以双线性插值恢复原始宽高，裁剪到 `[0, 255]`、四舍五入并转为 `uint8`。`run.json` 同时记录原始最小值、最大值和动态范围，避免仅凭拉伸后的 PNG 判断信号强弱。该操作只影响 PNG，不改变 `prediction.npy`。视频阶段将另行设计跨帧固定归一化，避免逐帧 min-max 造成闪烁。
 
 ### 6.7 命令行接口
 
 用户入口为：
 
 ```text
-python -m moiredet_repro.cli infer --input <image> --checkpoint <pth> --output <dir> --device cuda
+python -m moiredet_repro.cli infer --input <image> --checkpoint <pth> --checkpoint-manifest <json> --output <dir> --device cuda
 ```
 
-`--device auto` 作为默认值：CUDA 可用时使用 CUDA，否则使用 CPU。命令必须输出清晰的阶段日志和最终产物路径，并以进程退出码区分成功与失败。
+`--checkpoint-manifest` 默认查找与权重同名的 JSON 旁文件。`--device auto` 作为默认值：CUDA 可用时使用 CUDA，否则使用 CPU。`--output` 表示本次运行目录；若其中已经存在任一目标产物，首版直接报错，不覆盖旧结果。README 先要求激活 `moiredet-repro` 并执行一次可编辑安装，之后该命令可直接从仓库根目录运行。命令必须输出清晰的阶段日志和最终产物路径，并以进程退出码区分成功与失败。
 
 ## 7. 数据流
 
@@ -204,7 +218,7 @@ python -m moiredet_repro.cli infer --input <image> --checkpoint <pth> --output <
 ### 9.1 不依赖权重的测试
 
 - 配置解析与默认值；
-- 正常图像、灰度图、损坏文件和缺失文件的输入校验；
+- 正常图像可接受，以及灰度图、损坏文件和缺失文件应拒绝的输入校验；
 - 预处理张量形状、类型和数值范围；
 - 常量预测与普通预测的显示归一化；
 - 输出目录和 `run.json` 结构；
@@ -216,11 +230,11 @@ python -m moiredet_repro.cli infer --input <image> --checkpoint <pth> --output <
 
 - 检查点严格加载；
 - 官方样例图在 RTX 4060 上完成推理；
-- 输出二维图尺寸正确、数值全有限且动态范围非退化；
-- 相同输入和权重连续运行两次，结果在浮点容差内一致；
-- 三项文件产物和运行元数据完整；
-- 记录一次预热后的 GPU 推理耗时与峰值显存；
-- 人工检查 `moire_map.png` 和 `comparison.png` 可辨识、无全黑、全白或损坏。
+- 原始输出形状严格为 `320 x 320`、数值全有限且动态范围大于 `1e-8`，两个 PNG 的尺寸符合第 6.6 节；
+- 将 Python、NumPy 与 PyTorch 随机种子固定为 `2`，设置 `torch.backends.cudnn.benchmark=False` 和 `torch.backends.cudnn.deterministic=True`；相同输入和权重连续运行两次，以 `rtol=1e-5`、`atol=1e-6` 比较原始预测；
+- `prediction.npy`、`moire_map.png`、`comparison.png` 和 `run.json` 四个输出文件完整；
+- 预热 5 次后，用 `torch.cuda.synchronize()` 包围 20 次单图前向并记录中位数与 P95；在计时前重置峰值统计，并记录 `max_memory_allocated` 与 `max_memory_reserved`；
+- 人工检查 `moire_map.png` 和 `comparison.png` 文件可正常打开、没有非预期全黑或全白，并记录高响应区域是否与样例图中肉眼可见的摩尔纹区域对应。
 
 论文没有公开官方样例输出的逐像素基准，因此本阶段不虚构数值相等标准。若后来取得作者输出，则追加基于同一权重、输入和预处理的数值对比。
 
@@ -231,7 +245,7 @@ python -m moiredet_repro.cli infer --input <image> --checkpoint <pth> --output <
 1. 独立环境可以从文档重建；
 2. 上游提交固定且来源记录完整；
 3. 使用可信检查点，并记录 SHA-256；
-4. 一条命令在 RTX 4060 上成功处理官方样例和至少一张自选图片；
+4. 一条命令在 RTX 4060 上成功处理上游 `MoireDet/script/00002423.png` 样例和至少一张自选图片；
 5. 每次运行生成 `prediction.npy`、`moire_map.png`、`comparison.png` 和 `run.json`；
 6. 自动化测试全部通过；
 7. README 包含安装、权重放置、运行、输出解释和常见错误；
