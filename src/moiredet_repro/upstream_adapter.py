@@ -38,7 +38,9 @@ def activate_upstream_imports(paths: UpstreamPaths) -> None:
             sys.path.insert(0, value)
 
 
-def build_official_model(config: InferenceConfig, model_class: Optional[Type] = None):
+def build_official_model(
+    config: InferenceConfig, model_class: Optional[Type] = None
+) -> "torch.nn.Module":
     if model_class is None:
         paths = resolve_upstream()
         activate_upstream_imports(paths)
