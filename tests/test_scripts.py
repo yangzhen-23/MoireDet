@@ -121,3 +121,63 @@ def test_environment_cpu_forward_does_not_deserialize_or_access_network(monkeypa
     assert report["checkpoint_deserialization"] == "not_attempted"
     assert report["network_access"] == "not_attempted"
     assert report["safety_guards"] == "checkpoint/network operations prohibited"
+
+
+def test_clean_process_cpu_forward_keeps_import_bound_download_aliases_guarded():
+    probe = r'''
+import json
+import sys
+import urllib.request
+
+import torch
+import torch.utils.model_zoo
+
+blocked = []
+
+def guard(name):
+    def reject(*args, **kwargs):
+        blocked.append(name)
+        raise AssertionError("forbidden operation: {}".format(name))
+    return reject
+
+torch_load = guard("torch.load")
+hub_load = guard("torch.hub.load")
+hub_state_dict = guard("torch.hub.load_state_dict_from_url")
+model_zoo_load = guard("torch.utils.model_zoo.load_url")
+urlopen = guard("urllib.request.urlopen")
+torch.load = torch_load
+torch.hub.load = hub_load
+torch.hub.load_state_dict_from_url = hub_state_dict
+torch.utils.model_zoo.load_url = model_zoo_load
+urllib.request.urlopen = urlopen
+
+sys.path.insert(0, "scripts")
+import verify_environment
+
+report, exit_code = verify_environment.collect_report("cpu")
+import lib.models.modules.resnet as resnet
+import lib.models.modules.resnet_dct as resnet_dct
+
+if resnet.load_state_dict_from_url is not hub_state_dict:
+    raise AssertionError("resnet cached an unguarded download alias")
+if resnet_dct.load_state_dict_from_url is not hub_state_dict:
+    raise AssertionError("resnet_dct cached an unguarded download alias")
+if blocked:
+    raise AssertionError("forbidden operations were called: {}".format(blocked))
+if exit_code != 0 or report["cpu_random_forward_shape"] != [320, 320]:
+    raise AssertionError("CPU official forward contract failed: {}".format(report))
+if report["checkpoint_deserialization"] != "not_attempted":
+    raise AssertionError("checkpoint deserialization status drifted")
+if report["network_access"] != "not_attempted":
+    raise AssertionError("network status drifted")
+print(json.dumps({"blocked": blocked, "report": report}, sort_keys=True))
+'''
+    result = subprocess.run(
+        [PYTHON, "-c", probe], cwd=str(ROOT), capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["blocked"] == []
+    assert payload["report"]["cpu_random_forward_shape"] == [320, 320]
+    assert payload["report"]["checkpoint_deserialization"] == "not_attempted"
+    assert payload["report"]["network_access"] == "not_attempted"
