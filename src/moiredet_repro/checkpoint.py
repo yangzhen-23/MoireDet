@@ -31,7 +31,10 @@ _MANIFEST_KEYS = {
     "provenance_evidence",
     "expected_sha256",
 }
+_TRUST_STORE_KEYS = {"schema_version", "checkpoints"}
+_TRUSTED_CHECKPOINT_KEYS = _MANIFEST_KEYS - {"schema_version"}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_TRUST_STORE_PATH = Path(__file__).resolve().parents[2] / "configs" / "trusted_checkpoints.json"
 
 
 @dataclass(frozen=True)
@@ -88,31 +91,61 @@ def _read_manifest(path: Path, checkpoint: Path) -> CheckpointManifest:
             raise ValueError("manifest fields do not match schema version 1")
         if data["schema_version"] != 1:
             raise ValueError("schema_version must be 1")
-        manifest = CheckpointManifest(
-            filename=data["filename"],
-            source_type=data["source_type"],
-            source_reference=data["source_reference"],
-            retrieved_at=data["retrieved_at"],
-            provenance_evidence=data["provenance_evidence"],
-            expected_sha256=data["expected_sha256"],
-        )
-        if any(type(value) is not str for value in vars(manifest).values()):
-            raise ValueError("manifest text fields must be strings")
-        date.fromisoformat(manifest.retrieved_at)
+        manifest = _manifest_from_trust_record(data)
     except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
         raise CheckpointError("invalid checkpoint manifest {}: {}".format(path, exc)) from exc
 
     if manifest.filename != checkpoint.name:
         raise CheckpointError("manifest filename does not match checkpoint")
-    if manifest.source_type not in ALLOWED_SOURCES:
-        raise CheckpointError("untrusted source_type: {}".format(manifest.source_type))
-    if not manifest.source_reference.strip() or not manifest.provenance_evidence.strip():
-        raise CheckpointError("source_reference and provenance_evidence are required")
-    if not _SHA256_RE.fullmatch(manifest.expected_sha256):
-        raise CheckpointError("expected_sha256 must be 64 lowercase hexadecimal characters")
-    if manifest.expected_sha256 == "0" * 64:
-        raise CheckpointError("expected_sha256 must not be the all-zero sentinel")
     return manifest
+
+
+def _manifest_from_trust_record(data) -> CheckpointManifest:
+    """Validate provenance fields shared by sidecars and repository pins."""
+    manifest = CheckpointManifest(
+        filename=data["filename"],
+        source_type=data["source_type"],
+        source_reference=data["source_reference"],
+        retrieved_at=data["retrieved_at"],
+        provenance_evidence=data["provenance_evidence"],
+        expected_sha256=data["expected_sha256"],
+    )
+    if any(type(value) is not str for value in vars(manifest).values()):
+        raise ValueError("checkpoint provenance fields must be strings")
+    if not manifest.filename.strip():
+        raise ValueError("filename is required")
+    date.fromisoformat(manifest.retrieved_at)
+    if manifest.source_type not in ALLOWED_SOURCES:
+        raise ValueError("untrusted source_type: {}".format(manifest.source_type))
+    if not manifest.source_reference.strip() or not manifest.provenance_evidence.strip():
+        raise ValueError("source_reference and provenance_evidence are required")
+    if not _SHA256_RE.fullmatch(manifest.expected_sha256):
+        raise ValueError("expected_sha256 must be 64 lowercase hexadecimal characters")
+    if manifest.expected_sha256 == "0" * 64:
+        raise ValueError("expected_sha256 must not be the all-zero sentinel")
+    return manifest
+
+
+def _read_trusted_checkpoints(path: Path):
+    """Read only repository-controlled checkpoint pins, never user sidecars."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if type(data) is not dict or set(data) != _TRUST_STORE_KEYS:
+            raise ValueError("trusted store fields do not match schema version 1")
+        if data["schema_version"] != 1:
+            raise ValueError("schema_version must be 1")
+        if type(data["checkpoints"]) is not list:
+            raise ValueError("checkpoints must be a list")
+        trusted = []
+        for entry in data["checkpoints"]:
+            if type(entry) is not dict or set(entry) != _TRUSTED_CHECKPOINT_KEYS:
+                raise ValueError("trusted checkpoint fields do not match schema version 1")
+            trusted.append(_manifest_from_trust_record(entry))
+        if len(set(trusted)) != len(trusted):
+            raise ValueError("trusted checkpoint entries must be unique")
+        return tuple(trusted)
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        raise CheckpointError("invalid trusted checkpoint store {}: {}".format(path, exc)) from exc
 
 
 def _normalize_state_dict(state_dict: Mapping[str, torch.Tensor]) -> Mapping[str, torch.Tensor]:
@@ -137,6 +170,11 @@ def load_checkpoint_bundle(
         Path(manifest_path) if manifest_path is not None else default_manifest_path(checkpoint)
     )
     manifest = _read_manifest(manifest_file, checkpoint)
+    trusted = _read_trusted_checkpoints(_TRUST_STORE_PATH)
+    if manifest not in trusted:
+        raise CheckpointError(
+            "checkpoint manifest is not authorized by repository trusted checkpoint store"
+        )
     snapshot = _read_checkpoint_snapshot(checkpoint)
     actual_sha256 = _sha256_bytes(snapshot)
     if actual_sha256 != manifest.expected_sha256:
