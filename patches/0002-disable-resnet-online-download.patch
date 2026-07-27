@@ -1,0 +1,8 @@
+diff --git a/MoireDet/lib/models/model.py b/MoireDet/lib/models/model.py
+index eee7c58..ce1134c 100644
+--- a/MoireDet/lib/models/model.py
++++ b/MoireDet/lib/models/model.py
+@@ -136,2 +136,2 @@ class TripleBranchWithSpecificConv(nn.Module):
+-        self.attention_backbone = backbone_model(pretrained=True)
++        self.attention_backbone = backbone_model(pretrained=False)
+         self.attention_head = FPEM_FFM(backbone_out, fpem_repeat=fpem_repeat,

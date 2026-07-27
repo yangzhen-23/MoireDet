@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools==68.2.2", "wheel==0.44.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moiredet-repro"
+version = "0.1.0"
+description = "Auditable single-image inference wrapper for the official MoireDet implementation"
+requires-python = ">=3.8,<3.9"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "gpu: requires a working CUDA device",
+  "checkpoint: requires a trusted official MoireDet checkpoint",
+  "integration: crosses package and upstream boundaries",
+  "slow: takes materially longer than a unit test",
+  "benchmark: performs the fixed latency and memory benchmark"
+]

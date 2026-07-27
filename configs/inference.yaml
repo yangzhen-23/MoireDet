@@ -1,0 +1,19 @@
+model:
+  name: TripleBranchWithSpecificConv
+  args:
+    backbone: resnet18
+    fpem_repeat: 2
+    pretrained: true
+    segmentation_head: FPEM_FFM
+    is_dct: false
+    is_light: true
+preprocessing:
+  input_size: [320, 320]
+  channel_order: BGR
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  batch_size: 1
+rendering:
+  constant_epsilon: 1.0e-12
+integration:
+  minimum_dynamic_range: 1.0e-8
