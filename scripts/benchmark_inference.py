@@ -17,6 +17,39 @@ from moiredet_repro.inference import MoireDetInference, set_determinism
 from moiredet_repro.preprocessing import prepare_image
 
 
+class BenchmarkOutputError(OSError):
+    """The benchmark report could not be safely published."""
+
+
+def write_fresh_json(output, result):
+    """Publish a finite JSON report only if no output entry already exists."""
+    try:
+        payload = json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False).encode(
+            "utf-8"
+        )
+    except (TypeError, ValueError) as exc:
+        raise BenchmarkOutputError("benchmark result is not finite JSON: {}".format(exc)) from exc
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with output.open("xb") as handle:
+            written = handle.write(payload)
+            if written != len(payload):
+                raise OSError("incomplete benchmark report write")
+    except (FileExistsError, IsADirectoryError, PermissionError) as exc:
+        if output.exists():
+            raise BenchmarkOutputError(
+                "--output must be a fresh, nonexistent file"
+            ) from exc
+        raise BenchmarkOutputError(
+            "could not create benchmark output {}: {}".format(output, exc)
+        ) from exc
+    except OSError as exc:
+        raise BenchmarkOutputError(
+            "could not publish benchmark output {}: {}".format(output, exc)
+        ) from exc
+
+
 def parser():
     value = argparse.ArgumentParser(description="MoireDet RTX acceptance benchmark")
     value.add_argument("--input", type=Path, required=True)
@@ -45,8 +78,10 @@ def main(argv=None):
             "checkpoint_verified": service.checkpoint_info.checkpoint_verified,
         }
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        write_fresh_json(args.output, result)
+    except BenchmarkOutputError as exc:
+        parser().error(str(exc))
     print(args.output.resolve())
     return 0
 
