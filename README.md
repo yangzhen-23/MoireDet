@@ -72,6 +72,7 @@ D:\anaconda3\envs\moiredet-repro\python.exe -m pip check
 
 ```powershell
 D:\anaconda3\Scripts\conda.exe env create -f .\environment.yml
+D:\anaconda3\envs\moiredet-repro\python.exe -m pip install -e . --no-deps --no-build-isolation
 ```
 
 但当前经过完整实机验证的是“从 `exp` 克隆”路线，不能把 `environment.yml` 当作唯一已验证证据。
